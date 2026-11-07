@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enigma Machine — Encrypt &amp; Decrypt (standalone)</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --accent:#38bdf8; --text:#e2e8f0; --muted:#94a3b8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:900px; margin:0 auto; padding:24px; }
+  h1 { color:var(--accent); margin-bottom:4px; }
+  p.sub { color:var(--muted); margin-top:0; }
+  .card { background:var(--card); border-radius:12px; padding:20px; margin-bottom:16px; box-shadow:0 4px 16px rgba(0,0,0,.3); }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  input, textarea, select { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:var(--text); font-size:15px; }
+  textarea { min-height:120px; resize:vertical; font-family:monospace; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  button { padding:12px 20px; border:none; border-radius:8px; background:var(--accent); color:#0f172a; font-weight:700; cursor:pointer; font-size:15px; }
+  button.secondary { background:#334155; color:var(--text); }
+  .btns { display:flex; gap:12px; flex-wrap:wrap; }
+  .out { background:#0b1220; border:1px solid #334155; border-radius:8px; padding:14px; min-height:60px; font-family:monospace; white-space:pre-wrap; word-break:break-word; }
+  .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+  .status { font-size:13px; color:var(--muted); margin-top:8px; }
+  footer { color:var(--muted); font-size:12px; text-align:center; margin-top:8px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Enigma Machine</h1>
+  <p class="sub">Interactive encrypt / decrypt — runs entirely in your browser (no server). Based on the NSA <code>enigma-simulator</code>. Encryption is symmetric: same settings decrypt.</p>
+
+  <div class="card">
+    <label>Message</label>
+    <textarea id="message" placeholder="Type a message (letters and spaces only)..."></textarea>
+    <div class="hint">Only a–z / A–Z and spaces are allowed (spaces are stripped by the machine).</div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Rotor window key (3 letters)</label>
+        <input id="key" value="AAA" maxlength="3">
+      </div>
+      <div>
+        <label>Plugboard swaps (e.g. AB, CD, EF)</label>
+        <input id="swaps" placeholder="AB, CD">
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <label>Rotor order (left / middle / right)</label>
+      <div class="row3">
+        <select id="r0"><option>I</option><option>II</option><option>III</option><option>V</option></select>
+        <select id="r1"><option>I</option><option selected>II</option><option>III</option><option>V</option></select>
+        <select id="r2"><option>I</option><option>II</option><option selected>III</option><option>V</option></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="btns">
+    <button id="enc">Encrypt</button>
+    <button id="dec" class="secondary">Decrypt</button>
+    <button id="swap" class="secondary">Swap message ↔ result</button>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <label>Result</label>
+    <div class="out" id="result"></div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <footer>Standalone client-side build — embed this single HTML file anywhere (blog post, iframe, static host). Source: github.com/NationalSecurityAgency/enigma-simulator</footer>
+</div>
+
+<script>
+// ---- Port of NSA enigma-simulator (machine.py + components.py) to JavaScript ----
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+const ROTOR_WIRINGS = {
+  'I':   {forward:'EKMFLGDQVZNTOWYHXUSPAIBRCJ', backward:'UWYGADFPVZBECKMTHXSLRINQOJ'},
+  'II':  {forward:'AJDKSIRUXBLHWTMCQGZNPYFVOE', backward:'AJPCZWRLFBDKOTYUQGENHXMIVS'},
+  'III': {forward:'BDFHJLCPRTXVZNYEIWGAKMUSQO', backward:'TAGBPCSDQEUFVNZHYIXJWLRKOM'},
+  'V':   {forward:'VZBRGITYUPSDNHLXAWMJQOFECK', backward:'QCYLXWENFTZOSMVJUDKGIARPHB'}
+};
+const ROTOR_NOTCHES = {'I':'Q','II':'E','III':'V','V':'Z'};
+
+class Rotor {
+  constructor(rotorNum, windowLetter, nextRotor=null, prevRotor=null) {
+    this.rotorNum = rotorNum;
+    this.wiring = ROTOR_WIRINGS[rotorNum];
+    this.notch = ROTOR_NOTCHES[rotorNum];
+    this.window = windowLetter.toUpperCase();
+    this.offset = ALPHABET.indexOf(this.window);
+    this.nextRotor = nextRotor;
+    this.prevRotor = prevRotor;
+  }
+  step() {
+    if (this.nextRotor && this.window === this.notch) {
+      this.nextRotor.step();
+    }
+    this.offset = (this.offset + 1) % 26;
+    this.window = ALPHABET[this.offset];
+  }
+  encodeLetter(index, forward=true) {
+    if (typeof index === 'string' && index.length === 1) index = ALPHABET.indexOf(index.toUpperCase());
+    const key = forward ? 'forward' : 'backward';
+    const outputLetter = this.wiring[key][(index + this.offset) % 26];
+    const outputIndex = (ALPHABET.indexOf(outputLetter) - this.offset + 26) % 26;
+    if (forward && this.nextRotor) {
+      return this.nextRotor.encodeLetter(outputIndex, true);
+    }
+    if (!forward && this.prevRotor) {
+      return this.prevRotor.encodeLetter(outputIndex, false);
+    }
+    return outputIndex;
+  }
+  changeSetting(newWindowLetter) {
+    this.window = newWindowLetter.toUpperCase();
+    this.offset = ALPHABET.indexOf(this.window);
+  }
+}
+
+class Reflector {
+  constructor() {
+    this.wiring = {'A':'Y','B':'R','C':'U','D':'H','E':'Q','F':'S','G':'L','H':'D',
+      'I':'P','J':'X','K':'N','L':'G','M':'O','N':'K','O':'M','P':'I','Q':'E','R':'B',
+      'S':'F','T':'Z','U':'C','V':'W','W':'V','X':'J','Y':'A','Z':'T'};
+  }
+}
+
+class Plugboard {
+  constructor(swaps) {
+    this.swaps = {};
+    if (swaps && swaps.length) {
+      for (const swap of swaps) {
+        if (!swap || swap.length < 2) continue;
+        const a = swap[0].toUpperCase(), b = swap[1].toUpperCase();
+        this.swaps[a] = b;
+        this.swaps[b] = a;
+      }
+    }
+  }
+  updateSwaps(newSwaps, replace=false) {
+    if (replace) this.swaps = {};
+    if (newSwaps && Array.isArray(newSwaps)) {
+      for (const swap of newSwaps) {
+        if (!swap || swap.length < 2) continue;
+        const a = swap[0].toUpperCase(), b = swap[1].toUpperCase();
+        this.swaps[a] = b;
+        this.swaps[b] = a;
+      }
+    }
+  }
+}
+
+class Enigma {
+  constructor(key='AAA', swaps=null, rotorOrder=['I','II','III']) {
+    if (key.length !== 3) { console.warn('key must be 3 letters'); return; }
+    this.key = key.toUpperCase();
+    this.rotorOrder = rotorOrder;
+    this.rRotor = new Rotor(rotorOrder[2], this.key[2]);
+    this.mRotor = new Rotor(rotorOrder[1], this.key[1], this.rRotor);
+    this.lRotor = new Rotor(rotorOrder[0], this.key[0], this.mRotor);
+    this.mRotor.prevRotor = this.lRotor;
+    this.rRotor.prevRotor = this.mRotor;
+    this.reflector = new Reflector();
+    this.plugboard = new Plugboard(swaps);
+  }
+  encipher(message) {
+    if (/[^a-zA-Z ]/.test(message)) {
+      return 'Please provide a string containing only the characters a-zA-Z and spaces.';
+    }
+    let cipher = '';
+    for (const ch of message.toUpperCase().replace(/ /g,'').trim()) {
+      cipher += this.encodeDecodeLetter(ch);
+    }
+    return cipher;
+  }
+  decipher(message) { return this.encipher(message); }
+  encodeDecodeLetter(letter) {
+    if (/[^a-zA-Z ]/.test(letter)) {
+      return 'Please provide a letter in a-zA-Z.';
+    }
+    let l = letter.toUpperCase();
+    if (l in this.plugboard.swaps) l = this.plugboard.swaps[l];
+    this.lRotor.step();
+    const leftPass = this.lRotor.encodeLetter(ALPHABET.indexOf(l));
+    const reflOutput = this.reflector.wiring[ALPHABET[leftPass % 26]];
+    const finalLetter = ALPHABET[this.rRotor.encodeLetter(ALPHABET.indexOf(reflOutput), false)];
+    if (finalLetter in this.plugboard.swaps) return this.plugboard.swaps[finalLetter];
+    return finalLetter;
+  }
+  setRotorPosition(positionKey) {
+    if (typeof positionKey === 'string' && positionKey.length === 3) {
+      this.key = positionKey.toUpperCase();
+      this.lRotor.changeSetting(this.key[0]);
+      this.mRotor.changeSetting(this.key[1]);
+      this.rRotor.changeSetting(this.key[2]);
+    }
+  }
+  setRotorOrder(order) {
+    this.rRotor = new Rotor(order[2], this.key[2]);
+    this.mRotor = new Rotor(order[1], this.key[1], this.rRotor);
+    this.lRotor = new Rotor(order[0], this.key[0], this.mRotor);
+    this.mRotor.prevRotor = this.lRotor;
+    this.rRotor.prevRotor = this.mRotor;
+  }
+  setPlugs(swaps, replace=false) {
+    this.plugboard.updateSwaps(swaps, replace);
+  }
+}
+
+// ---- UI wiring ----
+function buildMachine() {
+  const key = document.getElementById('key').value.trim() || 'AAA';
+  const swapsRaw = document.getElementById('swaps').value.trim();
+  const swaps = swapsRaw ? swapsRaw.split(/[,\s]+/).filter(Boolean) : [];
+  const rotorOrder = [
+    document.getElementById('r0').value,
+    document.getElementById('r1').value,
+    document.getElementById('r2').value,
+  ];
+  return new Enigma(key, swaps, rotorOrder);
+}
+
+function process() {
+  const status = document.getElementById('status');
+  status.textContent = 'Processing...';
+  try {
+    const enigma = buildMachine();
+    const message = document.getElementById('message').value;
+    const result = enigma.encipher(message);
+    document.getElementById('result').textContent = result;
+    status.textContent = 'Done.';
+  } catch (e) {
+    status.textContent = 'Error: ' + e;
+  }
+}
+document.getElementById('enc').addEventListener('click', process);
+document.getElementById('dec').addEventListener('click', process);
+document.getElementById('swap').addEventListener('click', () => {
+  const m = document.getElementById('message');
+  const r = document.getElementById('result');
+  const tmp = m.value;
+  m.value = r.textContent;
+  r.textContent = tmp;
+});
+</script>
+</body>
+</html>
